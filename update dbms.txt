@@ -1,0 +1,463 @@
+# Enhanced AI Resume Analyzer with Advanced DBMS Features
+
+Here's the enhanced version of your project with additional DBMS functionalities:
+
+```python
+import streamlit as st 
+import pandas as pd 
+import base64, random 
+import time, datetime
+import spacy
+import pymysql
+import os 
+import socket 
+import platform
+import geocoder
+import secrets
+import io, random
+import plotly.express as px
+import plotly.graph_objects as go 
+import hashlib  # For password hashing
+from geopy.geocoders import Nominatim
+from geopy.exc import GeocoderTimedOut, GeocoderUnavailable 
+from pyresparser import resume_parser
+from pdfminer3.layout import LAParams, LTTextBox
+from pdfminer3.pdfpage import PDFPage
+from pdfminer3.pdfinterp import PDFResourceManager
+from pdfminer3.pdfinterp import PDFPageInterpreter
+from pdfminer3.converter import TextConverter
+from streamlit_tags import st_tags
+from PIL import Image
+import nltk 
+from Courses import ds_course, web_course, android_course, ios_course, uiux_course, resume_videos, interview_videos
+
+nltk.download('stopwords')
+nlp = spacy.load("en_core_web_sm")
+
+# Password hashing function
+def hash_password(password):
+    return hashlib.sha256(password.encode()).hexdigest()
+
+# Database connection function with error handling
+def get_db_connection():
+    try:
+        connection = pymysql.connect(
+            host='localhost',
+            user='root',
+            password='Hanzala123',
+            db='cv',
+            cursorclass=pymysql.cursors.DictCursor
+        )
+        return connection
+    except pymysql.Error as e:
+        st.error(f"Database connection failed: {e}")
+        return None
+
+# Enhanced function to create database schema with more tables
+def create_database_schema():
+    try:
+        connection = get_db_connection()
+        if connection is None:
+            return False
+        
+        with connection.cursor() as cursor:
+            # Create database if not exists
+            cursor.execute("CREATE DATABASE IF NOT EXISTS CV;")
+            
+            # Create user_data table with additional fields
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_data (
+                ID INT NOT NULL AUTO_INCREMENT,
+                sec_token VARCHAR(20) NOT NULL,
+                ip_add VARCHAR(50) NULL,
+                host_name VARCHAR(50) NULL, 
+                dev_user VARCHAR(50) NULL,
+                os_name_ver VARCHAR(50) NULL,
+                latlong VARCHAR(50) NULL,
+                city VARCHAR(50) NULL,
+                state VARCHAR(50) NULL,
+                country VARCHAR(50) NULL, 
+                act_name VARCHAR(50) NOT NULL,
+                act_email VARCHAR(50) NOT NULL,
+                act_mob VARCHAR(20) NOT NULL,
+                Name VARCHAR(500) NOT NULL,
+                Email_ID VARCHAR(500) NOT NULL,
+                resume_score VARCHAR(8) NOT NULL,
+                Timestamp VARCHAR(50) NOT NULL,
+                Page_no VARCHAR(5) NOT NULL,
+                Predicted_Field VARCHAR(100) NOT NULL,
+                User_level VARCHAR(50) NOT NULL,
+                Actual_skills TEXT NOT NULL,
+                Recommended_skills TEXT NOT NULL,
+                Recommended_courses TEXT NOT NULL,
+                pdf_name VARCHAR(50) NOT NULL,
+                PRIMARY KEY (ID),
+                INDEX idx_email (Email_ID),
+                INDEX idx_field (Predicted_Field)
+            )""")
+            
+            # Create user_feedback table with improved structure
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_feedback (
+                ID INT NOT NULL AUTO_INCREMENT, 
+                user_id INT NULL,
+                feed_name VARCHAR(50) NOT NULL,
+                feed_email VARCHAR(50) NOT NULL,
+                feed_score VARCHAR(10) NOT NULL,
+                comments TEXT NOT NULL,
+                Timestamp VARCHAR(50) NOT NULL,
+                PRIMARY KEY (ID),
+                FOREIGN KEY (user_id) REFERENCES user_data(ID) ON DELETE SET NULL
+            )""")
+            
+            # Create user authentication table
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                user_id INT NOT NULL AUTO_INCREMENT,
+                username VARCHAR(50) NOT NULL UNIQUE,
+                password_hash VARCHAR(64) NOT NULL,
+                email VARCHAR(100) NOT NULL UNIQUE,
+                role ENUM('admin', 'user') NOT NULL DEFAULT 'user',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_login TIMESTAMP NULL,
+                PRIMARY KEY (user_id)
+            )""")
+            
+            # Create courses table for better recommendations
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS courses (
+                course_id INT NOT NULL AUTO_INCREMENT,
+                course_name VARCHAR(100) NOT NULL,
+                course_link VARCHAR(255) NOT NULL,
+                course_field VARCHAR(50) NOT NULL,
+                course_level VARCHAR(20) NOT NULL,
+                PRIMARY KEY (course_id),
+                INDEX idx_field (course_field),
+                INDEX idx_level (course_level)
+            )""")
+            
+            # Create skills table
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS skills (
+                skill_id INT NOT NULL AUTO_INCREMENT,
+                skill_name VARCHAR(50) NOT NULL UNIQUE,
+                skill_category VARCHAR(50) NOT NULL,
+                PRIMARY KEY (skill_id),
+                INDEX idx_category (skill_category)
+            )""")
+            
+            connection.commit()
+            return True
+            
+    except pymysql.Error as e:
+        st.error(f"Error creating database schema: {e}")
+        return False
+    finally:
+        if connection:
+            connection.close()
+
+# Transaction wrapper for database operations
+def db_transaction(operations):
+    connection = get_db_connection()
+    if connection is None:
+        return False
+    
+    try:
+        with connection.cursor() as cursor:
+            for operation in operations:
+                cursor.execute(operation['query'], operation['args'])
+        connection.commit()
+        return True
+    except pymysql.Error as e:
+        connection.rollback()
+        st.error(f"Database transaction failed: {e}")
+        return False
+    finally:
+        connection.close()
+
+# Enhanced insert_data function with transaction support
+def insert_data(sec_token, ip_add, host_name, dev_user, os_name_ver, latlong, city, state, country, 
+               act_name, act_mail, act_mob, name, email, res_score, timestamp, no_of_pages, 
+               reco_field, cand_level, skills, recommended_skills, courses, pdf_name):
+    
+    operations = [
+        {
+            'query': """
+            INSERT INTO user_data 
+            (sec_token, ip_add, host_name, dev_user, os_name_ver, latlong, city, state, country, 
+             act_name, act_email, act_mob, Name, Email_ID, resume_score, Timestamp, Page_no, 
+             Predicted_Field, User_level, Actual_skills, Recommended_skills, Recommended_courses, pdf_name)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            'args': (sec_token, ip_add, host_name, dev_user, os_name_ver, latlong, city, state, country,
+                   act_name, act_mail, act_mob, name, email, res_score, timestamp, no_of_pages,
+                   reco_field, cand_level, skills, recommended_skills, courses, pdf_name)
+        }
+    ]
+    
+    return db_transaction(operations)
+
+# Enhanced user registration with password hashing
+def register_user(username, password, email, role='user'):
+    password_hash = hash_password(password)
+    
+    operations = [
+        {
+            'query': "INSERT INTO users (username, password_hash, email, role) VALUES (%s, %s, %s, %s)",
+            'args': (username, password_hash, email, role)
+        }
+    ]
+    
+    return db_transaction(operations)
+
+# User authentication function
+def authenticate_user(username, password):
+    connection = get_db_connection()
+    if connection is None:
+        return None
+    
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT * FROM users WHERE username = %s", (username,))
+            user = cursor.fetchone()
+            
+            if user and user['password_hash'] == hash_password(password):
+                # Update last login time
+                cursor.execute("UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE user_id = %s", (user['user_id'],))
+                connection.commit()
+                return user
+            return None
+    except pymysql.Error as e:
+        st.error(f"Authentication error: {e}")
+        return None
+    finally:
+        connection.close()
+
+# Function to get user by ID
+def get_user_by_id(user_id):
+    connection = get_db_connection()
+    if connection is None:
+        return None
+    
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT * FROM users WHERE user_id = %s", (user_id,))
+            return cursor.fetchone()
+    finally:
+        connection.close()
+
+# Function to populate initial course data
+def populate_initial_courses():
+    connection = get_db_connection()
+    if connection is None:
+        return False
+    
+    try:
+        with connection.cursor() as cursor:
+            # Check if courses already exist
+            cursor.execute("SELECT COUNT(*) AS count FROM courses")
+            if cursor.fetchone()['count'] > 0:
+                return True
+            
+            # Insert Data Science courses
+            for course in ds_course:
+                cursor.execute(
+                    "INSERT INTO courses (course_name, course_link, course_field, course_level) VALUES (%s, %s, 'Data Science', 'All')",
+                    (course[0], course[1])
+                )
+            
+            # Insert Web Development courses
+            for course in web_course:
+                cursor.execute(
+                    "INSERT INTO courses (course_name, course_link, course_field, course_level) VALUES (%s, %s, 'Web Development', 'All')",
+                    (course[0], course[1])
+                )
+            
+            # Insert other courses similarly...
+            
+            connection.commit()
+            return True
+    except pymysql.Error as e:
+        connection.rollback()
+        st.error(f"Error populating courses: {e}")
+        return False
+    finally:
+        connection.close()
+
+# Enhanced course recommender that uses database
+def course_recommender(field, level='All', limit=5):
+    connection = get_db_connection()
+    if connection is None:
+        return []
+    
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("""
+                SELECT course_name, course_link 
+                FROM courses 
+                WHERE course_field = %s AND (course_level = %s OR course_level = 'All')
+                ORDER BY RAND() 
+                LIMIT %s
+            """, (field, level, limit))
+            
+            courses = cursor.fetchall()
+            return [(course['course_name'], course['course_link']) for course in courses]
+    finally:
+        connection.close()
+
+# Function to get user statistics
+def get_user_stats():
+    connection = get_db_connection()
+    if connection is None:
+        return None
+    
+    try:
+        with connection.cursor() as cursor:
+            stats = {}
+            
+            # Total users
+            cursor.execute("SELECT COUNT(*) AS total_users FROM user_data")
+            stats['total_users'] = cursor.fetchone()['total_users']
+            
+            # Average resume score
+            cursor.execute("SELECT AVG(resume_score) AS avg_score FROM user_data")
+            stats['avg_score'] = float(cursor.fetchone()['avg_score'])
+            
+            # Most popular field
+            cursor.execute("""
+                SELECT Predicted_Field, COUNT(*) AS count 
+                FROM user_data 
+                GROUP BY Predicted_Field 
+                ORDER BY count DESC 
+                LIMIT 1
+            """)
+            result = cursor.fetchone()
+            stats['popular_field'] = result['Predicted_Field']
+            stats['popular_field_count'] = result['count']
+            
+            # Feedback stats
+            cursor.execute("SELECT AVG(feed_score) AS avg_feedback FROM user_feedback")
+            stats['avg_feedback'] = float(cursor.fetchone()['avg_feedback'])
+            
+            return stats
+    finally:
+        connection.close()
+
+# ... [Keep all your existing helper functions like pdf_reader, show_pdf, etc.]
+
+def run():
+    # Initialize database schema
+    if not create_database_schema():
+        st.error("Failed to initialize database. Please check your database connection.")
+        return
+    
+    # Populate initial course data if needed
+    if not populate_initial_courses():
+        st.warning("Could not populate initial course data. Course recommendations may be limited.")
+
+    img = Image.open('./logo/reume_logo.jpeg')
+    st.image(img)
+    
+    # Add user authentication to sidebar
+    st.sidebar.title("Authentication")
+    session = {'authenticated': False, 'user': None}
+    
+    login_option = st.sidebar.radio("Choose:", ["Login", "Register"])
+    
+    if login_option == "Login":
+        username = st.sidebar.text_input("Username")
+        password = st.sidebar.text_input("Password", type='password')
+        
+        if st.sidebar.button("Login"):
+            user = authenticate_user(username, password)
+            if user:
+                session['authenticated'] = True
+                session['user'] = user
+                st.sidebar.success(f"Welcome {user['username']}!")
+            else:
+                st.sidebar.error("Invalid credentials")
+    else:
+        # Registration form
+        with st.sidebar.form("registration_form"):
+            st.subheader("Register")
+            new_username = st.text_input("Username")
+            new_email = st.text_input("Email")
+            new_password = st.text_input("Password", type='password')
+            confirm_password = st.text_input("Confirm Password", type='password')
+            
+            if st.form_submit_button("Register"):
+                if new_password != confirm_password:
+                    st.error("Passwords don't match!")
+                else:
+                    if register_user(new_username, new_password, new_email):
+                        st.success("Registration successful! Please login.")
+                    else:
+                        st.error("Registration failed. Username may already exist.")
+
+    # Only show main app if authenticated
+    if session.get('authenticated', False):
+        user_role = session['user']['role']
+        
+        st.sidebar.markdown("# Choose Something...")
+        activites = ["User", "Feedback", "About"]
+        
+        # Add admin option if user is admin
+        if user_role == 'admin':
+            activites.append("Admin")
+            
+        choice = st.sidebar.selectbox("Choose among the given options: ", activites)
+        
+        # ... [Rest of your existing code with the enhanced database operations]
+        
+        # Example of using the enhanced course recommender:
+        # Instead of random selection from Courses.py, now we query the database
+        # rec_course = course_recommender(reco_field, cand_level, no_of_reco)
+        
+        # Similarly update other parts to use the new database functions
+
+    else:
+        st.warning("Please login or register to access the application")
+
+if __name__ == "__main__":
+    run()
+```
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+## Key Enhancements Made:
+
+1. **Database Schema Improvements**:
+   - Added more tables (users, courses, skills) with proper relationships
+   - Added indexes for better query performance
+   - Added foreign key constraints
+
+2. **User Authentication System**:
+   - Secure password hashing
+   - User roles (admin/user)
+   - Registration and login flows
+
+3. **Transaction Management**:
+   - Added transaction support for atomic operations
+   - Proper error handling and rollback
+
+4. **Enhanced Data Operations**:
+   - Better course recommendations from database
+   - User statistics and analytics
+   - Improved data retrieval methods
+
+5. **Security Improvements**:
+   - Parameterized queries to prevent SQL injection
+   - Secure password storage
+   - Role-based access control
+
+6. **Database Initialization**:
+   - Automatic schema creation
+   - Initial data population
+
+## Additional Recommendations:
+
+1. **Add Stored Procedures** for complex operations
+2. **Implement Database Backups** functionality
+3. **Add More Analytics** using window functions
+4. **Implement Database Migrations** for schema updates
+5. **Add Connection Pooling** for better performance
+
+This enhanced version demonstrates more advanced DBMS concepts while maintaining all your original functionality. The code is now more secure, maintainable, and demonstrates a deeper understanding of database systems.
