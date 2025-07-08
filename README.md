@@ -29,6 +29,3 @@ Parses resumes using NLP -> clusters keywords -> provides recommendations, predi
 ## Usage
 - Upload resume → get analysis
 - Admin login: `admin` / `admin@resume-analyzer`
-
-## Roadmap
-... (see above)
